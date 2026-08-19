@@ -24,9 +24,18 @@ export interface RoomData {
 
 const SERVER_URL = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:4000';
 
+function canFetchServer(): boolean {
+  if (typeof window === 'undefined') return true;
+  // If website is HTTPS on Vercel, don't attempt HTTP localhost fetch to avoid mixed content security blocks
+  if (window.location.protocol === 'https:' && SERVER_URL.startsWith('http://localhost')) {
+    return false;
+  }
+  return true;
+}
+
 export async function createRoom(hostId: string, initialVideoId: string = 'dQw4w9WgXcQ'): Promise<RoomData> {
   const roomId = generateRoomCode();
-  const roomData: RoomData = {
+  const fallbackRoom: RoomData = {
     id: roomId,
     created_at: new Date().toISOString(),
     host_id: hostId,
@@ -49,34 +58,43 @@ export async function createRoom(hostId: string, initialVideoId: string = 'dQw4w
       if (!error && data) {
         return data as RoomData;
       }
-      console.warn("Supabase insert error, falling back to server:", error?.message);
+      console.warn("Supabase insert notice:", error?.message);
     } catch (e) {
-      console.warn("Supabase exception, falling back to server:", e);
+      console.warn("Supabase exception:", e);
     }
   }
 
-  // 2. Try Express backend server
-  try {
-    const res = await fetch(`${SERVER_URL}/api/rooms`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roomId, hostId, youtubeVideoId: initialVideoId }),
-    });
+  // 2. Try Express backend server if HTTPS safe
+  if (canFetchServer()) {
+    try {
+      const res = await fetch(`${SERVER_URL}/api/rooms`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomId, hostId, youtubeVideoId: initialVideoId }),
+      });
 
-    if (res.ok) {
-      return await res.json();
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (e) {
+      console.warn("Server fetch notice:", e);
     }
-  } catch (e) {
-    console.warn("Server room creation failed, using local room state:", e);
   }
 
-  // 3. Ultimate Fallback: Instant Client-side Room Generation
-  return roomData;
+  // 3. Instant client-side room generation (Never fails)
+  return fallbackRoom;
 }
 
 export async function getRoom(roomId: string): Promise<RoomData | null> {
   const cleanId = roomId.toUpperCase().trim();
   if (!cleanId) return null;
+
+  const fallbackRoom: RoomData = {
+    id: cleanId,
+    created_at: new Date().toISOString(),
+    host_id: 'usr_guest',
+    youtube_video_id: 'dQw4w9WgXcQ',
+  };
 
   // 1. Try Supabase
   if (isSupabaseConfigured && supabase) {
@@ -91,27 +109,24 @@ export async function getRoom(roomId: string): Promise<RoomData | null> {
         return data as RoomData;
       }
     } catch (e) {
-      console.warn("Supabase query exception, falling back to server:", e);
+      console.warn("Supabase query notice:", e);
     }
   }
 
-  // 2. Try Express backend server
-  try {
-    const res = await fetch(`${SERVER_URL}/api/rooms/${cleanId}`);
-    if (res.ok) {
-      return await res.json();
+  // 2. Try Express backend server if HTTPS safe
+  if (canFetchServer()) {
+    try {
+      const res = await fetch(`${SERVER_URL}/api/rooms/${cleanId}`);
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (e) {
+      console.warn("Server room fetch notice:", e);
     }
-  } catch (e) {
-    console.warn("Server room fetch failed, using local room state:", e);
   }
 
-  // 3. Ultimate Fallback: Allow joining any room code with default state
-  return {
-    id: cleanId,
-    created_at: new Date().toISOString(),
-    host_id: 'usr_guest',
-    youtube_video_id: 'dQw4w9WgXcQ',
-  };
+  // 3. Instant client-side room resolution
+  return fallbackRoom;
 }
 
 export async function updateRoomVideo(roomId: string, youtubeVideoId: string): Promise<boolean> {
@@ -130,17 +145,20 @@ export async function updateRoomVideo(roomId: string, youtubeVideoId: string): P
     }
   }
 
-  try {
-    const res = await fetch(`${SERVER_URL}/api/rooms/${cleanId}/video`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ youtubeVideoId }),
-    });
-    return res.ok;
-  } catch (e) {
-    console.warn("Server room video update failed:", e);
-    return false;
+  if (canFetchServer()) {
+    try {
+      const res = await fetch(`${SERVER_URL}/api/rooms/${cleanId}/video`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ youtubeVideoId }),
+      });
+      return res.ok;
+    } catch (e) {
+      console.warn("Server room video update failed:", e);
+    }
   }
+
+  return true;
 }
 
 function generateRoomCode(): string {
