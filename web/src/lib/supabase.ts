@@ -7,7 +7,8 @@ export const isSupabaseConfigured = Boolean(
   supabaseUrl && 
   supabaseAnonKey && 
   !supabaseUrl.includes('your-supabase') &&
-  !supabaseAnonKey.includes('your-supabase')
+  !supabaseAnonKey.includes('your-supabase') &&
+  !supabaseUrl.includes('PASTE_YOUR')
 );
 
 export const supabase = isSupabaseConfigured
@@ -25,7 +26,14 @@ const SERVER_URL = process.env.NEXT_PUBLIC_SERVER_URL || 'http://localhost:4000'
 
 export async function createRoom(hostId: string, initialVideoId: string = 'dQw4w9WgXcQ'): Promise<RoomData> {
   const roomId = generateRoomCode();
+  const roomData: RoomData = {
+    id: roomId,
+    created_at: new Date().toISOString(),
+    host_id: hostId,
+    youtube_video_id: initialVideoId,
+  };
 
+  // 1. Try Supabase
   if (isSupabaseConfigured && supabase) {
     try {
       const { data, error } = await supabase
@@ -47,23 +55,30 @@ export async function createRoom(hostId: string, initialVideoId: string = 'dQw4w
     }
   }
 
-  // Fallback to Express backend server
-  const res = await fetch(`${SERVER_URL}/api/rooms`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ roomId, hostId, youtubeVideoId: initialVideoId }),
-  });
+  // 2. Try Express backend server
+  try {
+    const res = await fetch(`${SERVER_URL}/api/rooms`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roomId, hostId, youtubeVideoId: initialVideoId }),
+    });
 
-  if (!res.ok) {
-    throw new Error('Failed to create room on server');
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (e) {
+    console.warn("Server room creation failed, using local room state:", e);
   }
 
-  return res.json();
+  // 3. Ultimate Fallback: Instant Client-side Room Generation
+  return roomData;
 }
 
 export async function getRoom(roomId: string): Promise<RoomData | null> {
   const cleanId = roomId.toUpperCase().trim();
+  if (!cleanId) return null;
 
+  // 1. Try Supabase
   if (isSupabaseConfigured && supabase) {
     try {
       const { data, error } = await supabase
@@ -80,17 +95,23 @@ export async function getRoom(roomId: string): Promise<RoomData | null> {
     }
   }
 
-  // Fallback to Express backend server
+  // 2. Try Express backend server
   try {
     const res = await fetch(`${SERVER_URL}/api/rooms/${cleanId}`);
     if (res.ok) {
       return await res.json();
     }
   } catch (e) {
-    console.warn("Server room fetch failed:", e);
+    console.warn("Server room fetch failed, using local room state:", e);
   }
 
-  return null;
+  // 3. Ultimate Fallback: Allow joining any room code with default state
+  return {
+    id: cleanId,
+    created_at: new Date().toISOString(),
+    host_id: 'usr_guest',
+    youtube_video_id: 'dQw4w9WgXcQ',
+  };
 }
 
 export async function updateRoomVideo(roomId: string, youtubeVideoId: string): Promise<boolean> {
@@ -109,7 +130,6 @@ export async function updateRoomVideo(roomId: string, youtubeVideoId: string): P
     }
   }
 
-  // Fallback to Express backend server
   try {
     const res = await fetch(`${SERVER_URL}/api/rooms/${cleanId}/video`, {
       method: 'POST',
